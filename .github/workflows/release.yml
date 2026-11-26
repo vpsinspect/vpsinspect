@@ -35,9 +35,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
           for arch in amd64 arm64; do
-            GOOS=linux GOARCH="$arch" go build -trimpath -buildvcs=false -mod=vendor \
-              -ldflags="-s -w -buildid=" \
+            GOOS=linux GOARCH="${arch}" go build -trimpath -buildvcs=false -mod=vendor \
+              -ldflags="-s -w -buildid= -X github.com/vpsinspect/vpsinspect/pkg/version.Version=${VERSION}" \
               -o "dist/vpsinspect_${TAG}_linux_${arch}" ./cmd/vpsinspect
           done
           (cd dist && sha256sum vpsinspect_* > SHA256SUMS.txt)
