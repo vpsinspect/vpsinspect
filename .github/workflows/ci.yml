@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run ShellCheck on shell scripts
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(
+            git ls-files -z | xargs -0 -r -I{} bash -c '
+              f="$1"
+              [[ -f "$f" ]] || exit 0
+              if [[ "$f" == *.sh ]]; then
+                printf "%s\n" "$f"
+              elif head -n 1 "$f" 2>/dev/null | grep -Eq "^#!.*(ba|da|k|z)?sh([[:space:]]|$)"; then
+                printf "%s\n" "$f"
+              fi
+            ' _ {}
+          )
+
+          if (( ${#scripts[@]} == 0 )); then
+            echo "No shell scripts found yet; skipping ShellCheck."
+            exit 0
+          fi
+
+          printf 'Checking %d shell script(s):\n' "${#scripts[@]}"
+          printf '  - %s\n' "${scripts[@]}"
+          shellcheck -x --severity=warning "${scripts[@]}"
