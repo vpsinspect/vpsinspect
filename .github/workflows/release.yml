@@ -25,9 +25,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@6406ec1f9d5a6e23b1e9f9f08d0945e7e5e48a5 # v6.2.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.26.x"
+          cache: false
 
       - name: Build linux/amd64 and linux/arm64
         run: |
