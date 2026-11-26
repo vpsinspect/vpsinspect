@@ -1,0 +1,17 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - gosec
+    - ineffassign
+    - staticcheck
+    - unused
+
+issues:
+  exclude-rules:
+    - path: cmd/vpsinspect/main_test.go
+      linters:
+        - gosec

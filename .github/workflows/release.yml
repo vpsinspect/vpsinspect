@@ -3,50 +3,57 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions: {}
 
 jobs:
   release:
     name: Build, attest, and publish release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    environment: release
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "0"
+      SOURCE_DATE_EPOCH: "0"
     steps:
-      - name: Checkout tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Package release archive and SHA-256 checksums
-        env:
-          TAG: ${{ github.ref_name }}
+      - uses: actions/setup-go@6406ec1f9d5a6e23b1e9f9f08d0945e7e5e48a5 # v6.2.0
+        with:
+          go-version: "1.26.x"
+
+      - name: Build linux/amd64 and linux/arm64
         run: |
           set -euo pipefail
           mkdir -p dist
-          archive="dist/vpsinspect-${TAG}.tar.gz"
-          git archive --format=tar.gz --prefix="vpsinspect-${TAG}/" -o "$archive" HEAD
-          (cd dist && sha256sum "vpsinspect-${TAG}.tar.gz" > SHA256SUMS.txt)
+          TAG="${GITHUB_REF_NAME}"
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" go build -trimpath -buildvcs=false -mod=vendor \
+              -ldflags="-s -w -buildid=" \
+              -o "dist/vpsinspect_${TAG}_linux_${arch}" ./cmd/vpsinspect
+          done
+          (cd dist && sha256sum vpsinspect_* > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/vpsinspect-*.tar.gz
+            dist/vpsinspect_*
             dist/SHA256SUMS.txt
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
-            "dist/vpsinspect-${TAG}.tar.gz" \
-            "dist/SHA256SUMS.txt" \
-            --title "$TAG" \
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
             --generate-notes

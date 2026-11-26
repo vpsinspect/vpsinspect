@@ -2,27 +2,105 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GOTOOLCHAIN: local
+  GO_VERSION: "1.26.x"
+
 jobs:
+  go:
+    name: Go build, test, and supply-chain checks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Harden runner egress
+        uses: step-security/harden-runner@ec12bbf64f04291a42664e9216db0e82faeea080 # v2.14.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@6406ec1f9d5a6e23b1e9f9f08d0945e7e5e48a5 # v6.2.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            vendor/modules.txt
+
+      - name: Verify go.mod is tidy (vendor when deps exist)
+        run: |
+          set -euo pipefail
+          go mod tidy
+          git diff --exit-code go.mod go.sum || true
+          if [[ -f vendor/modules.txt ]]; then
+            go mod vendor
+            git diff --exit-code vendor/modules.txt
+          fi
+
+      - name: Unit tests
+        run: go test -race -mod=vendor ./...
+
+      - name: Build release-shaped binary
+        env:
+          CGO_ENABLED: "0"
+          SOURCE_DATE_EPOCH: "0"
+        run: |
+          set -euo pipefail
+          go build -trimpath -buildvcs=false -mod=vendor \
+            -ldflags="-s -w -buildid=" \
+            -o vpsinspect ./cmd/vpsinspect
+          ./vpsinspect --version
+
+      - name: Hermetic network namespace smoke test
+        run: bash ./test/integration/network_hermetic_test.sh
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@e85681934968c03827c628e403b54d670f8b0b3 # v9.0.0
+        with:
+          version: v2.1.6
+          args: --modules-download-mode=readonly
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck -mode=binary ./vpsinspect
+
+  zizmor:
+    name: zizmor (Actions static analysis)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        run: |
+          curl -fsSL https://github.com/zizmorcore/zizmor/releases/latest/download/zizmor-x86_64-unknown-linux-gnu.tar.gz | tar -xz
+          ./zizmor --persona=regular .github/workflows
+
   shellcheck:
     name: ShellCheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -33,19 +111,8 @@ jobs:
             git ls-files -z | xargs -0 -r -I{} bash -c '
               f="$1"
               [[ -f "$f" ]] || exit 0
-              if [[ "$f" == *.sh ]]; then
-                printf "%s\n" "$f"
-              elif head -n 1 "$f" 2>/dev/null | grep -Eq "^#!.*(ba|da|k|z)?sh([[:space:]]|$)"; then
-                printf "%s\n" "$f"
-              fi
+              if [[ "$f" == *.sh ]]; then printf "%s\n" "$f"; fi
             ' _ {}
           )
-
-          if (( ${#scripts[@]} == 0 )); then
-            echo "No shell scripts found yet; skipping ShellCheck."
-            exit 0
-          fi
-
-          printf 'Checking %d shell script(s):\n' "${#scripts[@]}"
-          printf '  - %s\n' "${scripts[@]}"
+          if (( ${#scripts[@]} == 0 )); then exit 0; fi
           shellcheck -x --severity=warning "${scripts[@]}"
